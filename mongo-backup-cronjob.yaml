@@ -1,0 +1,141 @@
+# Source: anc-analyticsbatch/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongo
+data:
+  mongodb_backup.sh: |-
+    #!/bin/bash
+
+    BACKUP_NAME=dump
+    BACKUP_DIR=/tmp
+    DAILY_BKP_RETENTION=3
+    WEEKLY_BKP_RETENTION=3
+    MONTHLY_BKP_RETENTION=3
+    MONGODB_HOST_NAME=mongo
+    MONGODB_PORT=27017
+    MONGODB_USER=admin
+    MONGODB_PASSWORD="password"
+    ARTIFACTORY_APP_USER=admin
+    ARTIFACTORY_APP_KEY=""
+    ARTIFACTORY_URL="http://*.*.*.*:8081/artifactory"
+    ARTIFACTORY_REPO_NAME=mongodb-backup
+
+    date
+    TIMESTAMP=`date +%F_%T`
+    #TIMESTAMP=`date +%F`
+    BACKUP_FILE_NAME="${BACKUP_NAME}-$TIMESTAMP.gz"
+    BACKUP_FILE_PATH="${BACKUP_DIR}/daily/${BACKUP_FILE_NAME}.gz"
+
+    DAILY_BKP_DEL_DATE=`date +%F -d "${DAILY_BKP_RETENTION} days ago"`
+    WEEKLY_BKP_DEL_DATE=`date +%F -d "${WEEKLY_BKP_RETENTION} weeks ago"`
+    MONTHLY_BKP_DEL_DATE=`date +%F -d "${MONTHLY_BKP_RETENTION} months ago"`
+
+    #Creating directory stracure in shared volume
+    [ ! -d "${BACKUP_DIR}/daily" ] && mkdir ${BACKUP_DIR}/daily
+    [ ! -d "${BACKUP_DIR}/weekly" ] && mkdir ${BACKUP_DIR}/weekly
+    [ ! -d "${BACKUP_DIR}/monthly" ] && mkdir ${BACKUP_DIR}/monthly
+
+    echo "Dumping MongoDB database to compressed archive"
+    mongodump --host $MONGODB_HOST_NAME --port=$MONGODB_PORT -u $MONGODB_USER -p $MONGODB_PASSWORD --archive=${BACKUP_FILE_PATH} --gzip
+
+    if [ -f ${BACKUP_FILE_PATH} ] ; then
+      echo -e "Backup complete!\n"
+    else
+      echo -e "Backup failed!\n"
+      exit 1
+    fi       
+
+    artifact_upload(){
+      LOCATION=$1
+      echo "Uploading $LOCATION backup to Artifactory server"
+      curl -s -u ${ARTIFACTORY_APP_USER}:${ARTIFACTORY_APP_KEY} -X PUT "${ARTIFACTORY_URL}/${ARTIFACTORY_REPO_NAME}/${LOCATION}/${BACKUP_FILE_NAME}" -T ${BACKUP_FILE_PATH}
+      if (( $? )) ; then 
+        echo -e "\nFailed to upload backup to Artifactory Server!\n"
+      else 
+        echo -e "\n${LOCATION}/${BACKUP_FILE_NAME} Backup uploaded to Artifactory Server!\n"
+      fi
+    }        
+
+    artifact_delete(){
+      LOCATION=$1
+      BACKUP_RETENTION=$2
+      echo -e "Checking ${BACKUP_RETENTION} (${LOCATION}) backup from Artifactory server\n"
+      ARTIFACT_LIST=$(curl -s -u ${ARTIFACTORY_APP_USER}:${ARTIFACTORY_APP_KEY} -X GET "${ARTIFACTORY_URL}/api/search/artifact?name=${BACKUP_RETENTION}&repos=${ARTIFACTORY_REPO_NAME}"  | jq -r .results[].uri | grep ${LOCATION} | awk -F/ '{print $NF}')
+      for i in ${ARTIFACT_LIST} ; do
+        curl -s -u ${ARTIFACTORY_APP_USER}:${ARTIFACTORY_APP_KEY} -X DELETE "${ARTIFACTORY_URL}/${ARTIFACTORY_REPO_NAME}/${LOCATION}/${i}"  
+        if (( $? )) ; then 
+          echo -e "\nFailed to delete backup from Artifactory Server!\n"
+        else 
+          echo -e "\n${LOCATION}/$i backup deleted from Artifactory Server!\n"
+        fi
+      done  
+    }
+
+    artifact_upload daily
+    artifact_delete daily ${DAILY_BKP_DEL_DATE}    
+    #Delete backup from shared volume
+    rm -f ${BACKUP_DIR}/daily/*${DAILY_BKP_DEL_DATE}*
+    [ $? != 0  ] && echo -e "Backup deleted from daily directory\n"
+
+    #Take backup of every monday
+    if (( `date +%u` == 0 )); then
+      artifact_upload weekly
+      #Copy weekly backup in shared volume
+      cp ${BACKUP_FILE_PATH} ${BACKUP_DIR}/weekly/
+      artifact_delete weekly ${WEEKLY_BKP_DEL_DATE}
+      #Delete backup from shared volume
+      rm -f ${BACKUP_DIR}/weekly/*${WEEKLY_BKP_DEL_DATE}*
+      [ $? != 0  ] && echo -e "Backup deleted from weekly directory\n"
+
+    fi
+
+    #Take backup at first day of month
+    if (( `date +%d` == 1 )); then
+      artifact_upload monthly
+      #Copy weekly backup in shared volume
+      cp ${BACKUP_FILE_PATH} ${BACKUP_DIR}/monthly/
+      artifact_delete monthly ${MONTHLY_BKP_DEL_DATE}
+      #Delete backup from shared volume
+      rm -f ${BACKUP_DIR}/monthly/*${MONTHLY_BKP_DEL_DATE}*
+      [ $? != 0  ] && echo -e "Backup deleted from monthly directory\n"
+    fi
+
+---
+# Source: anc-analyticsbatch/templates/cronjob.yaml
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: mongo
+  labels:
+    app.kubernetes.io/name: mongo
+spec:
+  schedule: "0 19 * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mongo
+    spec:
+      template:
+        spec:
+          containers:
+          - name: mongo
+            securityContext:
+              {}
+            image: anubhav2301/mongo
+            command:
+            - /bin/bash
+            - /mongodb_backup.sh
+            imagePullPolicy: IfNotPresent
+            volumeMounts:
+            - name: mongo
+              mountPath: /mongodb_backup.sh
+              subPath: mongodb_backup.sh
+          volumes:
+          - name: mongo
+            configMap:
+              name: mongo  
+          restartPolicy: OnFailure
