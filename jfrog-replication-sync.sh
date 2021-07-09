@@ -18,8 +18,7 @@ sync_replication_configuration() {
 	echo "### Pull the replication configuration of $repository_name from $ARTIFACTORY_PRIMARY_URL ###"
 	curl -u ${ARTIFACTORY_APP_USER}:${ARTIFACTORY_APP_KEY} -X GET "${ARTIFACTORY_PRIMARY_URL}/api/replications/$repository_name" > $tmp_file
 
-	res=$(cat $tmp_file | jq .errors[].status)
-	if (( "$res" == "404" )) ; then
+	if grep -q errors "$tmp_file"; then
 		echo "Replication configuration isn't found!"
 	else
 		### Change url befor push to secondary
