@@ -18,20 +18,25 @@ sync_replication_configuration() {
 	echo "### Pull the replication configuration of $repository_name from $ARTIFACTORY_PRIMARY_URL ###"
 	curl -u ${ARTIFACTORY_APP_USER}:${ARTIFACTORY_APP_KEY} -X GET "${ARTIFACTORY_PRIMARY_URL}/api/replications/$repository_name" > $tmp_file
 
-	### Change url befor push to secondary
-	sed -i 's/$ARTIFACTORY_SECONDARY_URL/$ARTIFACTORY_PRIMARY_URL/' $tmp_file
-
-	### Push the replication configuration of the repository to Secondary server
-	echo "### Push the replication configuration of $repository_name to $ARTIFACTORY_SECONDARY_URL ###"
-	curl -u ${ARTIFACTORY_APP_USER}:${ARTIFACTORY_APP_KEY} -X PUT -H "Content-Type: application/json" "${ARTIFACTORY_SECONDARY_URL}/api/replications/$repository_name" -d @$tmp_file
-
-	### Change url and enabled value befor push to Primary
-	sed -i 's/$ARTIFACTORY_PRIMARY_URL/$ARTIFACTORY_SECONDARY_URL/' $tmp_file
-	sed -i 's/"enabled" .*$/"enabled" : false,/' $tmp_file
-
-	### Push the replication configuration of the repository to Primary server
-	echo "### Disable the replication of $repository_name to $ARTIFACTORY_PRIMARY_URL ###"
-	curl -u ${ARTIFACTORY_APP_USER}:${ARTIFACTORY_APP_KEY} -X PUT -H "Content-Type: application/json" "${ARTIFACTORY_PRIMARY_URL}/api/replications/$repository_name" -d @$tmp_file
+	res=$(cat $tmp_file | jq .errors[].status)
+	if (( "$res" == "404" )) ; then
+		echo "Replication configuration isn't found!"
+	else
+		### Change url befor push to secondary
+		sed -i 's/$ARTIFACTORY_SECONDARY_URL/$ARTIFACTORY_PRIMARY_URL/' $tmp_file
+	
+		### Push the replication configuration of the repository to Secondary server
+		echo "### Push the replication configuration of $repository_name to $ARTIFACTORY_SECONDARY_URL ###"
+		curl -u ${ARTIFACTORY_APP_USER}:${ARTIFACTORY_APP_KEY} -X PUT -H "Content-Type: application/json" "${ARTIFACTORY_SECONDARY_URL}/api/replications/$repository_name" -d @$tmp_file
+	
+		### Change url and enabled value befor push to Primary
+		sed -i 's/$ARTIFACTORY_PRIMARY_URL/$ARTIFACTORY_SECONDARY_URL/' $tmp_file
+		sed -i 's/"enabled" .*$/"enabled" : false,/' $tmp_file
+	
+		### Push the replication configuration of the repository to Primary server
+		echo "### Disable the replication of $repository_name to $ARTIFACTORY_PRIMARY_URL ###"
+		curl -u ${ARTIFACTORY_APP_USER}:${ARTIFACTORY_APP_KEY} -X PUT -H "Content-Type: application/json" "${ARTIFACTORY_PRIMARY_URL}/api/replications/$repository_name" -d @$tmp_file
+	fi
 }
 
 get_repositories_list
