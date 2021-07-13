@@ -98,6 +98,11 @@ sync_permissions() {
 	curl -u ${ARTIFACTORY_APP_USER}:${ARTIFACTORY_APP_KEY} -X PUT -H "Content-Type: application/json" "${ARTIFACTORY_SECONDARY_URL}/api/security/permissions/$permission_name" -d @$tmp_file
 }
 
+get_system_configuration() {
+	echo "### Save the system configuration from $ARTIFACTORY_PRIMARY_URL into /tmp/artifactory.config.xml file ###"
+	curl -u ${ARTIFACTORY_APP_USER}:${ARTIFACTORY_APP_KEY} -X GET "${ARTIFACTORY_PRIMARY_URL}/api/system/configuration" > /tmp/artifactory.config.xml
+}
+
 get_repositories
 for i in $repositories_list ; do
 	sync_replication_configuration $i
@@ -117,3 +122,5 @@ get_permissions
 for i in $permissions_list ; do
 	sync_permissions $i
 done
+
+get_system_configuration
