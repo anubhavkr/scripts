@@ -1,0 +1,175 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgresql-k8s-deployment
+spec:
+  selector:
+    matchLabels:
+      app: postgresql-k8s
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: postgresql-k8s
+        group: artifactory-k8s-demo
+    spec:
+      initContainers:
+      - name: "remove-lost-found"
+        image: "busybox:1.26.2"
+        imagePullPolicy: "IfNotPresent"
+        command:
+        - 'sh'
+        - '-c'
+        - 'rm -rf /var/lib/postgresql/data/lost+found'
+#        volumeMounts:
+#        - mountPath: "/var/lib/postgresql/data"
+#          name: postgresql-volume
+      containers:
+      - name: postgresql-k8s
+        image: docker.bintray.io/postgres:9.6.11
+        env:
+        - name: POSTGRES_DB
+          value: artifactory
+        - name: POSTGRES_USER
+          value: artifactory
+        - name: POSTGRES_PASSWORD
+          value: password
+        ports:
+        - containerPort: 5432
+        resources:
+          requests:
+            memory: "500Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+#        volumeMounts:
+#        - mountPath: "/var/lib/postgresql/data"
+#          name: postgresql-volume
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - exec pg_isready
+          initialDelaySeconds: 60
+          timeoutSeconds: 5
+          failureThreshold: 6
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - exec pg_isready
+          initialDelaySeconds: 30
+          timeoutSeconds: 3
+          periodSeconds: 5
+#      volumes:
+#      - name: postgresql-volume
+#        persistentVolumeClaim:
+#          claimName: postgresql-claim
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql-k8s-service
+  labels:
+    app: postgresql-k8s-service
+    group: artifactory-k8s-demo
+spec:
+  ports:
+  - port: 5432
+    protocol: TCP
+  selector:
+    app: postgresql-k8s
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: artifactory-k8s-deployment
+spec:
+  selector:
+    matchLabels:
+      app: artifactory-pro-k8s
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: artifactory-pro-k8s
+        group: artifactory-k8s-demo
+    spec:
+      securityContext:
+        runAsUser: 1030
+        fsGroup: 1030
+      initContainers:
+      - name: "remove-lost-found"
+        image: "alpine:3.9"
+        command:
+        - 'sh'
+        - '-c'
+        - 'rm -rfv /var/opt/jfrog/artifactory/lost+found'
+#        volumeMounts:
+#        - name: artifactory-pro-volume
+#          mountPath: "/var/opt/jfrog/artifactory"
+      containers:
+      - name: artifactory-pro-k8s
+        image: docker.bintray.io/jfrog/artifactory-pro:6.23.13
+        env:
+        - name: DB_TYPE
+          value: postgresql
+        - name: DB_USER
+          value: artifactory
+        - name: DB_PASSWORD
+          value: password
+        - name: DB_HOST
+          value: postgresql-k8s-service
+        # Make sure to keep the memory java args aligned with the resources definitions
+        - name: EXTRA_JAVA_OPTIONS
+          value: "-Xms1g -Xmx2g"
+        ports:
+        - containerPort: 8081
+#        volumeMounts:
+#        - mountPath: "/var/opt/jfrog/artifactory"
+#          name: artifactory-pro-volume
+        # Make sure to keep the resources set with values matching EXTRA_JAVA_OPTIONS above
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+        readinessProbe:
+          httpGet:
+            path: '/artifactory/webapp/#/login'
+            port: 8081
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 10
+        livenessProbe:
+          httpGet:
+            path: '/artifactory/webapp/#/login'
+            port: 8081
+          initialDelaySeconds: 180
+          periodSeconds: 10
+#      volumes:
+#      - name: artifactory-pro-volume
+#        persistentVolumeClaim:
+#          claimName: artifactory-claim
+      imagePullSecrets:
+      - name: docker-reg-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: artifactory
+  labels:
+    app: artifactory
+    group: artifactory-k8s-demo
+spec:
+  type: NodePort
+  ports:
+  - port: 8081
+    protocol: TCP
+  selector:
+    app: artifactory-pro-k8s
