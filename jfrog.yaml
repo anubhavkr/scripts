@@ -155,7 +155,7 @@ spec:
 #      volumes:
 #      - name: artifactory-pro-volume
 #        persistentVolumeClaim:
-#          claimName: artifactory-claim
+##          claimName: artifactory-claim
       imagePullSecrets:
       - name: docker-reg-secret
 ---
